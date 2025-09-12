@@ -51,6 +51,7 @@ const UsersSchema = mongoose.Schema(
     bidStartTime: { type: Date},
     bidEndTime: { type: Date},
     breakTime: { type: Date},
+    bidProjectIds: [String], // Track projects that have been bid on to avoid duplicates
     //for admin purposes
 
     subscriptionType: { type: String, enum: ['trial', 'monthly', 'semi-annual', 'annual','not-subscribed'] },

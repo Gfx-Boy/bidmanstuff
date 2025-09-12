@@ -180,6 +180,47 @@
     </header>
     <!-- Navbar End -->
 
+    <!-- Analytics Section Start -->
+    <section class="relative pt-10 pb-10">
+        <div class="container lg:px-20">
+            <div class="card mb-4" style="background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 12px; padding: 2rem; margin-bottom: 2rem;">
+                <div class="card-body">
+                    <h5 class="card-title" style="color: white; font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem;">📊 Your Bidding Analytics</h5>
+                    <div class="row mb-4">
+                        <div class="col-md-3 col-6 mb-3">
+                            <div class="text-center" style="background: rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 1rem;">
+                                <div style="color: #00d4ff; font-size: 2rem; font-weight: bold;" id="totalBids">...</div>
+                                <div style="color: rgba(255, 255, 255, 0.8); font-size: 0.9rem;">Total Bids</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6 mb-3">
+                            <div class="text-center" style="background: rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 1rem;">
+                                <div style="color: #00ff88; font-size: 2rem; font-weight: bold;" id="successBids">...</div>
+                                <div style="color: rgba(255, 255, 255, 0.8); font-size: 0.9rem;">Successful</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6 mb-3">
+                            <div class="text-center" style="background: rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 1rem;">
+                                <div style="color: #ff4757; font-size: 2rem; font-weight: bold;" id="failedBids">...</div>
+                                <div style="color: rgba(255, 255, 255, 0.8); font-size: 0.9rem;">Failed</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-6 mb-3">
+                            <div class="text-center" style="background: rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 1rem;">
+                                <div style="color: #ffa502; font-size: 2rem; font-weight: bold;"><span id="winRate">...</span>%</div>
+                                <div style="color: rgba(255, 255, 255, 0.8); font-size: 0.9rem;">Win Rate</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="background: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 1rem;">
+                        <canvas id="biddingChart" height="100"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <!-- Analytics Section End -->
+
     <!-- Start -->
     <section id="home" class="relative pt-[74px] overflow-hidden" style="margin-bottom : 50px">
         <div class="card">
@@ -417,6 +458,20 @@
 
     <!-- Animation on Scroll Plugin Js -->
     <script src="/assets/libs/aos/aos.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            // Fetch analytics data from backend
+            $.get('/api/bidding-analytics', function(data) {
+                $('#totalBids').text(data.total);
+                $('#successBids').text(data.success);
+                $('#failedBids').text(data.failed);
+                $('#winRate').text(data.winRate);
+                new Chart(document.getElementById('biddingChart'), {
+                    type: 'line',
+                    data: data.chartData
+                });
+            });
+        </script>
 
     <!-- Counter Js -->
     <script src="/assets/js/counter.js"></script>

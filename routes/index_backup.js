@@ -1,4 +1,4 @@
-﻿var express = require("express");
+var express = require("express");
 // const { stringify } = require("flatted");
 // const bodyParser = require("body-parser");
 var router = express.Router();
@@ -4345,691 +4345,713 @@ router.post("/admin/resetPassword", isAdmin, async (req, res) => {
 
 async function processAutoBids() {
   try {
-    console.log("ðŸš€ Starting processAutoBids function with real-time logic");
     const usersWithAutoBidOn = await Users.find({ autoBid: true });
-    console.log(`Found ${usersWithAutoBidOn.length} users with autoBid enabled`);
-    
-    // Initialize bid tracking variables
-    let bidsAllowed = 0;
-    let bidsSubmitted = 0;
- // Initialize at the top level
-    
-    if (usersWithAutoBidOn.length === 0) {
-      console.log("No users with autoBid enabled");
-      return "No users to process";
-    }
+    const usersWithAutoBidOnIds = usersWithAutoBidOn.map((user) => user._id);
 
-    for (let i = 0; i < usersWithAutoBidOn.length; i++) {
-      const user = usersWithAutoBidOn[i];
-      console.log(`\nðŸ‘¤ Processing user ${i + 1}/${usersWithAutoBidOn.length}: ${user._id}`);
-      
-      // Real-time calculations
-      const currentTime = new Date();
-      const timeLimitInMinutes = parseInt(user.timeLimit) || 30;
-      const timeIntervalInMinutes = parseInt(user.timeInterval) || 2;
-      
-      console.log(`ðŸ“Š User settings - timeLimit: ${timeLimitInMinutes} min, timeInterval: ${timeIntervalInMinutes} min`);
-      
-      // Ensure user has bidStartTime
-      if (!user.bidStartTime) {
-        console.log("â° Setting initial bidStartTime for user:", user._id);
-        user.bidStartTime = currentTime;
-        await user.save();
-      }
-      
-      // Calculate session end time based on bidStartTime + timeLimit
-      const sessionStartTime = new Date(user.bidStartTime);
-      const sessionEndTime = new Date(sessionStartTime.getTime() + timeLimitInMinutes * 60000);
-      
-      console.log(`ðŸ• Session start: ${sessionStartTime.toISOString()}`);
-      console.log(`ðŸ• Session end: ${sessionEndTime.toISOString()}`);
-      console.log(`ðŸ• Current time: ${currentTime.toISOString()}`);
-      console.log(`â° Session expired: ${currentTime >= sessionEndTime}`);
-      
-      // Check if entire bidding session has expired
-      if (currentTime >= sessionEndTime) {
-        console.log("â° Bidding session expired. Turning OFF autoBid for user:", user._id);
-        await Users.findOneAndUpdate(
-          { _id: user._id },
-          {
-            $set: {
-              autoBid: false,
-              bidStartTime: null,
-              bidEndTime: null,
-              breakTime: null,
-            },
-          }
-        );
-        console.log("âœ… AutoBid turned OFF due to session expiration");
-        continue;
-      }
-      
-      // Calculate which bidding cycle we're in
-      const timeSinceStart = currentTime.getTime() - sessionStartTime.getTime();
-      const cyclesCompleted = Math.floor(timeSinceStart / (timeIntervalInMinutes * 60000));
-      const nextCycleStartTime = new Date(sessionStartTime.getTime() + (cyclesCompleted + 1) * timeIntervalInMinutes * 60000);
-      
-      console.log(`ðŸ”„ Cycles completed: ${cyclesCompleted}`);
-      console.log(`ðŸ”„ Next cycle starts: ${nextCycleStartTime.toISOString()}`);
-      console.log(`ðŸ”„ Time until next cycle: ${Math.floor((nextCycleStartTime.getTime() - currentTime.getTime()) / 1000)} seconds`);
-      
-  // Removed break period logic: always attempt to bid every minute during session
-      
-      // Check if user has bids remaining
-      if (user.bidsAllow <= 0) {
-        console.log("âŒ No bids remaining for user:", user._id);
-        continue;
-      }
-      
-      console.log("ðŸŸ¢ In active bidding period. Ready to process bids for user:", user._id);
-      console.log(`ðŸ’° User has ${user.bidsAllow} bids remaining`);
-      
-      // Extract user data for bidding
+    for (let i = 0; i < usersWithAutoBidOnIds.length; ) {
+      console.log("Current user index:", i);
+      // Get user ID from session
+      const userId = usersWithAutoBidOnIds[i];
+
+      // Fetch user details using the user ID
+      let user = await Users.findById(userId);
+      console.log("user id: ", user._id);
+      // Extract access token from user details
       let accessToken = user.access_token;
       let userSkills = user.skills;
-      
-      if (!accessToken) {
-        console.log("âŒ No access token for user:", user._id);
-        continue;
-      }
-      
-      if (!userSkills || userSkills.length === 0) {
-        console.log("âŒ No skills configured for user:", user._id);
-        continue;
-      }
-      
-      // Map user skills to skill values
       const userSkillsWithValue = userSkills
         .map((skill) => {
           const matchedSkill = allSkills.find((s) => s.tag === skill);
           return matchedSkill ? { skill, value: matchedSkill.value } : null;
         })
         .filter(Boolean);
-      
-      if (userSkillsWithValue.length === 0) {
-        console.log("âŒ No valid skills found for user:", user._id);
-        continue;
-      }
-      
-      const userSkillValues = userSkillsWithValue.map((skill) => Number(skill.value));
-      
-      // Extract user preferences
-      let excludedSkills = user.excluded_skills || [];
-      let excludedCountries = user.excluded_countries || [];
+      const userSkillValues = userSkillsWithValue.map((skill) =>
+        Number(skill.value)
+      );
+      // Extract excluded skills and excluded countries from user details
+      let excludedSkills = user.excluded_skills;
+      let excludedCountries = user.excluded_countries;
       let clientPaymentVerified = user.payment_verified;
       let clientEmailVerified = user.email_verified;
       let clientDepositMade = user.deposit_made;
-      let minimumBudgetFix = parseInt(user.minimum_budget_fixed) || 0;
-      let minimumBudgetHourly = parseInt(user.minimum_budget_hourly) || 0;
+      let minimumBudgetFix = parseInt(user.minimum_budget_fixed);
+      let minimumBudgetHourly = parseInt(user.minimum_budget_hourly);
 
       // Construct headers with access token
-      const headers = {
-        'Content-Type': 'application/json',
-        'Freelancer-OAuth-V1': accessToken  // OAuth token for general API requests
-      };
-
-      // First, let's get and update the user's language settings
-      try {
-        console.log("🌐 Checking user language settings...");
-        
-        // First get current settings
-        const settingsResponse = await axios.get(
-          'https://www.freelancer.com/api/users/0.1/self/',
-          { 
-            headers,
-            params: {
-              settings: true,
-              webapp: true
-            }
-          }
+      const headers = {  'content-type': 'application/json',"freelancer-oauth-v1": accessToken };
+      let bidEndTime2;
+      let brakeTime2;
+      console.log("user: ", user);
+      if (user.bidEndTime) {
+        bidEndTime2 = new Date(user.bidEndTime);
+        console.log("Bid End Time:", bidEndTime2);
+      }
+      if (user.breakTime) {
+        brakeTime2 = new Date(user.breakTime);
+        console.log("Bid End Time:", brakeTime2);
+      }
+      let bidsAllowed = user.bidsAllow;
+      console.log("bits allowed are", bidsAllowed);
+      const currentTime = new Date();
+      console.log("user bid end time : ");
+      console.log(
+        "here is user current time : " +
+          currentTime +
+          " here is user bid end time : " +
+          bidEndTime2
+      );
+      console.log(
+        "here is user current time : " +
+          currentTime +
+          " here is user break time : " +
+          brakeTime2
+      );
+      
+      // Real-time bid session management
+      const timeLimitInMinutes = parseInt(user.timeLimit) || 30;
+      const timeIntervalInMinutes = parseInt(user.timeInterval) || 2;
+      
+      // Ensure user has a valid bidStartTime
+      if (!user.bidStartTime) {
+        console.log("Setting initial bidStartTime for user:", user._id);
+        await Users.findOneAndUpdate(
+          { _id: user._id },
+          { $set: { bidStartTime: currentTime } },
+          { new: true }
         );
-
-        // Check if we need to update language settings
-        if (!settingsResponse.data?.result?.search_project_languages ||
-            settingsResponse.data.result.search_project_languages.length === 0) {
-          
-          console.log("⚙️ Updating language settings to accept all languages...");
-          
-          // Update to accept all languages
-          await axios.put(
-            'https://www.freelancer.com/api/users/0.1/settings/',
-            {
-              settings: {
-                search_project_languages: ["en", "hi", "bn", "ur", "te", "ta", "mr", "gu", "kn", "ml", "pa", "ar", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko"]
-              }
-            },
-            { 
-              headers,
-              params: {
-                webapp: true
-              }
-            }
-          );
-          
-          console.log("✅ Language settings updated successfully");
-        } else {
-          console.log("✅ Language settings already configured:", 
-            settingsResponse.data.result.search_project_languages);
-        }
-      } catch (error) {
-        console.error("❌ Error managing language settings:", 
-          error.response?.data?.message || error.message);
+        user.bidStartTime = currentTime;
       }
       
-      console.log("🔍 Searching for projects with", userSkillValues.length, "skills");
+      // Calculate real-time session end based on bidStartTime + timeLimit
+      const sessionStartTime = new Date(user.bidStartTime);
+      const sessionEndTime = new Date(sessionStartTime.getTime() + timeLimitInMinutes * 60000);
       
-      try {
-        // API endpoint for fetching projects
-        const url = "https://freelancer.com/api/projects/0.1/projects/all/";
-        // Use Freelancer's search filtering for efficiency
-        const params = {
-          // Core search parameters
-          jobs: userSkillValues,
-          project_statuses: ["active"],
-          sort_field: "submitdate",
-          sort_order: "desc",
-          limit: 10,
-          offset: 0,
-          
-          // Budget filters
-          min_avg_price: Math.max(user.lower_bid_range || 10, minimumBudgetFix || 0),
-          max_avg_price: user.higher_bid_range || null,
-          hourly_project_min_price: minimumBudgetHourly || null,
-          
-          // Client quality filters
-          client_payment_verified: clientPaymentVerified === true,
-          client_email_verified: clientEmailVerified === true,
-          client_deposit_made: clientDepositMade === true,
-          client_has_posted_projects: true,
-          client_min_reputation: 4.0,
-          
-          // Location filters
-          excluded_countries: excludedCountries,
-          
-          // Project details needed
-          full_description: true,
-          job_details: true,
-          user_details: true,
-          location_details: true,
-          user_reputation: true,
-          
-          // Skill and category filters
-          excluded_jobs: excludedSkills,
-          job_categories: true,
-          similar_jobs: true,
-          include_recommended: true,
-          
-          // Additional filters
-          project_types: ["fixed", "hourly"],
-          languages: ["en"],  // Default to English projects
-          with_user_bids: true,
-          min_bid_period: 1,  // At least 1 day to bid
-          upgrades_enabled: true,  // Projects allowing upgrades
-          user_reputation: true,
-          
-          // Skill matching
-          similar_jobs: true,
-          include_recommended: true,
-          job_categories: true,
-          
-          // Additional filters
-          project_types: ["fixed", "hourly"],
-          languages: ["en"],  // Default to English projects
-          with_user_bids: true
-        };
-
-        // Make request to fetch projects
-        const response = await axios.get(url, {
-          params: params,
-          headers: headers,
-        });
-
-        // Process response data
-        const responseData = response.data;
-        const projects = responseData.result.projects;
-
-        console.log("📋 Found", projects.length, "projects");
-
-        if (projects.length === 0) {
-          console.log("No projects found for user skills");
-          continue;
-        }
-
-        // Extract user details for project owners
-        const ownerIds = projects.map((project) => project.owner_id);
-
-        const projectsDetails = await Promise.all(
-          ownerIds.map(async (ownerId) => {
-            if (!isNaN(ownerId)) {
-              try {
-                const ownerUrl = `https://freelancer.com/api/users/0.1/users/${ownerId}/`;
-                const ownerResponse = await axios.get(ownerUrl, {
-                  params: {
-                    jobs: true,
-                    reputation: true,
-                    employer_reputation: true,
-                    reputation_extra: true,
-                    employer_reputation_extra: true,
-                    job_ranks: true,
-                    staff_details: true,
-                    completed_user_relevant_job_count: true,
-                  },
-                  headers: headers,
-                });
-                return ownerResponse.data.result;
-              } catch (error) {
-                if (error.response && error.response.status === 404) {
-                  console.error(`User with ownerId ${ownerId} not found.`);
-                  return null;
-                } else {
-                  console.error(`Error fetching user details for ownerId ${ownerId}:`, error.message);
-                  return null;
-                }
-              }
-            } else {
-              return null;
-            }
-          })
+      console.log("🕐 Session start time:", sessionStartTime);
+      console.log("🕐 Session end time (calculated):", sessionEndTime);
+      console.log("🕐 Current time:", currentTime);
+      console.log("⏰ Session expired?", currentTime >= sessionEndTime);
+      
+      // Check if the entire bidding session has expired
+      if (currentTime >= sessionEndTime) {
+        console.log("⏰ Bidding session has expired. Turning OFF autoBid for user:", user._id);
+        await Users.findOneAndUpdate(
+          { _id: user._id },
+          {
+            $set: {
+              autoBid: false,
+              bidEndTime: null,
+              bidStartTime: null,  
+              breakTime: null,
+            },
+          },
+          { new: true }
         );
-
-        // Process projects with owner details
-        const projects2 = responseData.result.projects.map((project, index) => ({
-          projectid: project.id,
-          type: project.type,
-          description: project.description,
-          title: project.title,
-          currencyName: project.currency.name,
-          currencySign: project.currency.sign,
-          bidCount: project.bid_stats.bid_count,
-          bidAverage: project.bid_stats.bid_avg,
-          jobNames: project.jobs.map((job) => job.name),
-          minimumBudget: project.budget.minimum,
-          maximumBudget: project.budget.maximum,
-          country: project.location.country.flag_url,
-          fullName: projectsDetails[index]?.username,
-          displayName: projectsDetails[index]?.public_name,
-          ownerCountry: projectsDetails[index]?.location?.country?.name,
-          payment: projectsDetails[index]?.status?.payment_verified,
-          email: projectsDetails[index]?.status?.email_verified,
-          deposit_made: projectsDetails[index]?.status?.deposit_made,
-          identity_verified: projectsDetails[index]?.status?.identity_verified,
-          countryShortName: projectsDetails[index]?.timezone?.country,
-          SkillsTags: project.jobs.map((job) => job.id),
-        }));
-
-        // Filter projects based on remaining criteria that can't be handled by API filters
-        const filteredProjects = projects2.filter((project, index) => {
-          // Add debugging for filtering process
-          console.log(`\nFiltering project: ${project.title}`);
-
-          // Additional client details check (already filtered by API but verify)
-          const clientDetails = projectsDetails[index];
-          if (clientDetails && clientDetails.employer_reputation) {
-            // Double check reputation and completion count
-            if (clientDetails.employer_reputation.complete_count === 0) {
-              console.log("❌ Project rejected: No completed projects");
-              return false;
-            }
-          }
-
-          // Check if project budget meets user's minimum requirements
-          const projectBudget = project.type === 'FIXED' ? project.minimumBudget : project.minimumBudget * 40; // For hourly, estimate monthly (40 hours)
-          const userMinBudget = project.type === 'FIXED' ? user.minimum_budget_fixed : user.minimum_budget_hourly;
-
-          if (userMinBudget && projectBudget < userMinBudget) {
-            console.log(`❌ Project rejected: Budget ${projectBudget} is below user's minimum requirement of ${userMinBudget}`);
-            return false;
-          }
-
-          // Check if project is a contest (we want to avoid these)
-          if (project.type === "CONTEST") {
-            console.log("❌ Project rejected: Contest type project");
-            return false;
-          }
-
-          // Additional country verification (belt and suspenders)
-          const projectCountry = project.countryShortName?.toLowerCase();
-          if (excludedCountries.length > 0 && projectCountry && excludedCountries.includes(projectCountry)) {
-            console.log(`❌ Project rejected: Country ${projectCountry} is excluded`);
-            return false;
-          }
-          
-          // Location checks
-          if (project.local_details && project.local_details.local_only === true) {
-            console.log("❌ Project rejected: Local only project");
-            return false;
-          }
-
-          // Project passes all filters
-          console.log("✅ Project accepted: Meets all criteria");
-          return true;
-        });
-
-        console.log("✅", filteredProjects.length, "projects match user criteria");
-
-        // Process only one project per cycle
-        if (filteredProjects.length > 0) {
-          // Initialize bid tracking array if it doesn't exist
-          if (!user.bidProjectIds) {
-            user.bidProjectIds = [];
-          }
-
-          // Filter out projects that have already been bid on by this user
-          const unbidProjects = filteredProjects.filter(project => 
-            !user.bidProjectIds.includes(project.projectid.toString())
-          );
-
-          let project;
-          if (unbidProjects.length === 0) {
-            console.log("🔄 All available projects have been bid on. Clearing bid history to start fresh cycle.");
-            // Reset the bid tracking array to allow bidding on projects again
-            user.bidProjectIds = [];
-            await user.save();
-            
-            // Select the first project from the original list
-            project = filteredProjects[0];
-            console.log("🎯 Processing project (fresh cycle):", project.title);
-          } else {
-            // Select the first project that hasn't been bid on
-            project = unbidProjects[0];
-            console.log("🎯 Processing new project:", project.title);
-            console.log("📊 Projects remaining in cycle:", unbidProjects.length);
-          }
-
-          // Check if user has bids remaining
-          if (user.bidsAllow <= 0) {
-            console.log("❌ No more bids allowed for this user");
-            continue;
-          }
-
-          // Proceed with bid submission for the selected project
-          console.log("💼 Preparing to submit bid for project:", project.title);
-
-          // Always generate fresh AI content for each bid
-          let templateContent = "";
-          
-          try {
-            // Generate unique bid content using ChatGPT for every project
-            console.log("🤖 Generating AI bid content for project:", project.title);
-            if (!templateContent) {
-              console.log("🤖 Generating AI bid content with ChatGPT");
-              
-              // Prepare project information for AI
-              const projectInfo = {
-                title: project.title,
-                type: project.type.toLowerCase() === "fixed" ? "fixed-price" : "hourly",
-                description: project.description,
-                skills: project.jobNames.join(", "),
-                budget: project.type === "FIXED" ? `$${project.minimumBudget}-$${project.maximumBudget}` : `$${project.minimumBudget}/hour`,
-                clientName: project.fullName || "there",
-                clientCountry: project.ownerCountry || "Unknown"
-              };
-
-              const userInfo = {
-                skills: user.skills.join(", "),
-                experience: "Experienced professional with proven track record"
-              };
-
-              const prompt = `You are a professional freelancer writing a bid proposal for a project on Freelancer.com.
-
-Project Details:
-- Title: ${projectInfo.title}
-- Type: ${projectInfo.type}
-- Description: ${projectInfo.description}
-- Required Skills: ${projectInfo.skills}
-- Budget: ${projectInfo.budget}
-- Client: ${projectInfo.clientName}
-- Location: ${projectInfo.clientCountry}
-
-Your Profile:
-- Skills: ${userInfo.skills}
-- Experience: ${userInfo.experience}
-
-Important:
-1. Start with "Hi ${projectInfo.clientName}" (or just "Hi" if no name available)
-2. Reference their specific project needs
-3. Mention their location/timezone if available
-4. Show understanding of their project requirements
-
-Generate a personalized bid proposal. Important guidelines:
-- Do NOT use any placeholder text like [Client] or [Project]
-- Use the actual project title and details
-- Make it sound natural and conversational
-- Be specific about the project requirements
-- Mention actual skills and experience
-- Keep it professional but warm
-
-Structure the response with these sections:
-
-1. Introduction:
-- Start with "Hello" or "Hi" (no placeholder names)
-- Show understanding of the specific project needs
-
-2. Relevant Experience:
-- Mention specific skills that match the project
-- Reference similar work you've done
-
-3. Approach:
-- Brief outline of how you'll tackle this project
-- Timeline or delivery expectations
-
-4. Call to Action:
-- Ask relevant questions about the project
-- Suggest next steps
-
-Keep the response under 250 words and make it sound genuinely interested and professional.`;
-
-              // Get API key for ChatGPT
-              const API_KEY = process.env.chatGptKey;
-              if (!API_KEY) {
-                console.error("ChatGPT API_KEY is not defined in environment variables");
-                throw new Error("ChatGPT API_KEY is not defined");
-              }
-
-              const response = await axios.post(
-                'https://api.openai.com/v1/chat/completions',
-                {
-                  model: "gpt-3.5-turbo",
-                  messages: [{ role: "user", content: prompt }],
-                  max_tokens: 250,
-                  temperature: 0.7
-                },
-                {
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${API_KEY}`
-                  }
-                }
-              );
-
-              // Extract the generated content
-              templateContent = response.data.choices[0].message.content.trim();
-              console.log("✅ Generated unique AI bid content");
-            }
-          } catch (error) {
-            console.error("Error generating bid content:", error.message);
-            // Professional fallback template if AI generation fails
-            templateContent = `Hello! I've reviewed your ${project.title} project and I'm excited to help you achieve your goals.
-
-Project Approach:
-1. Initial Analysis & Planning
-   - Detailed requirements review
-   - Project scope definition
-   - Timeline planning
-
-2. Development & Implementation
-   - Regular progress updates
-   - Quality-focused development
-   - Timely delivery
-
-3. Testing & Delivery
-   - Thorough testing process
-   - Documentation included
-   - Post-delivery support
-
-I have extensive experience in ${project.jobNames.join(", ")} and would love to discuss your specific requirements. Let's connect to move forward!
-
-Best regards`;
-          }
-
-          // Ensure we have content
-          if (!templateContent) {
-            templateContent = "I am interested in your project and would like to discuss it further.";
-          }
-
-          try {
-
-            // Calculate bid amount
-            let bidAmount;
-            if (project.type === "FIXED") {
-              bidAmount = Math.max(
-                project.minimumBudget,
-                user.minimum_budget_fixed || project.minimumBudget
-              );
-            } else {
-              bidAmount = Math.max(
-                project.minimumBudget,
-                user.minimum_budget_hourly || project.minimumBudget
-              );
-            }
-
-            // Get freelancer ID first
-            const profileResponse = await axios.get(
-              'https://www.freelancer.com/api/users/0.1/self/',
-              {
-                headers: {
-                  'Freelancer-OAuth-V1': accessToken,
-                  'Content-Type': 'application/json'
-                }
-              }
-            );
-
-            if (!profileResponse.data?.result?.id) {
-              console.error("❌ Could not get user's Freelancer ID");
-              continue;
-            }
-
-            const freelancerId = profileResponse.data.result.id;
-            console.log("✅ Got Freelancer ID:", freelancerId);
-
-            // Prepare bid data with AI-generated content
-            const bidData = {
-              project_id: project.projectid,
-              bidder_id: freelancerId,
-              amount: bidAmount,
-              period: user.deliveryTime || 7,
-              description: templateContent,
-              milestone_percentage: 100
-            };
-
-            // Submit bid
-            const bidResponse = await axios.post(
-              'https://www.freelancer.com/api/projects/0.1/bids/',
-              bidData,
-              { headers: { 'Freelancer-OAuth-V1': accessToken } }
-            );
-
-            if (bidResponse.data.status === 'success') {
-              console.log("✅ Bid submitted successfully for", project.title);
-              
-              // Track this project ID to avoid bidding on it again
-              if (!user.bidProjectIds) {
-                user.bidProjectIds = [];
-              }
-              user.bidProjectIds.push(project.projectid.toString());
-              
-              // Update bid counts and save bid tracking
-              await Users.updateOne(
-                { _id: user._id },
-                { 
-                  $inc: { bidsAllow: -1, bidsLimit: -1 },
-                  $set: { bidProjectIds: user.bidProjectIds }
-                }
-              );
-
-              // Record the bid
-              await Projects.create({
-                projectTitle: project.title,
-                bidAmount: bidAmount,
-                bidDescription: bidData.description,
-                userName: project.fullName || 'Unknown',
-                time: new Date().toISOString().split("T")[0],
-                user: user._id
-              });
-            } else {
-              console.log("❌ Bid submission failed:", bidResponse.data.message);
-              // Even if bid failed, track the project to avoid repeated failed attempts
-              if (!user.bidProjectIds) {
-                user.bidProjectIds = [];
-              }
-              user.bidProjectIds.push(project.projectid.toString());
-              await Users.updateOne(
-                { _id: user._id },
-                { $set: { bidProjectIds: user.bidProjectIds } }
-              );
-            }
-          } catch (bidError) {
-            console.error("❌ Error during bid submission:", bidError.message);
-            if (bidError.response) {
-              console.error("📊 Response status:", bidError.response.status);
-              console.error("📊 Response data:", JSON.stringify(bidError.response.data, null, 2));
-              console.error("📊 Response headers:", bidError.response.headers);
-              
-              // Handle "already bid" error specifically
-              if (bidError.response.status === 409 && 
-                  bidError.response.data?.message?.includes('already bid')) {
-                console.log("⚠️ Already placed a bid on this project. Adding to bid tracking list.");
-                
-                // Track this project to avoid future attempts
-                if (!user.bidProjectIds) {
-                  user.bidProjectIds = [];
-                }
-                user.bidProjectIds.push(project.projectid.toString());
-                await Users.updateOne(
-                  { _id: user._id },
-                  { $set: { bidProjectIds: user.bidProjectIds } }
-                );
-                console.log("✅ Project added to bid tracking list");
-              }
-            }
-            continue;
-          }
-        }
-      } catch (error) {
-        console.error("❌ Error fetching projects for user:", user._id, error.message);
+        console.log("✅ AutoBid turned OFF due to session expiration");
+        i++; // Move to next user
         continue;
       }
+      
+      // Calculate current break cycle end time
+      const timeSinceStart = currentTime.getTime() - sessionStartTime.getTime();
+      const cyclesCompleted = Math.floor(timeSinceStart / (timeIntervalInMinutes * 60000));
+      const currentCycleEndTime = new Date(sessionStartTime.getTime() + (cyclesCompleted + 1) * timeIntervalInMinutes * 60000);
+      
+      console.log("🔄 Cycles completed:", cyclesCompleted);
+      console.log("🔄 Current cycle end time:", currentCycleEndTime);
+      console.log("🔄 In break period?", currentTime < currentCycleEndTime);
+      
+      // Check if we're in a break period (within the current cycle)
+      if (currentTime < currentCycleEndTime) {
+        console.log("🔴 Currently in break period. Skipping bidding for user:", user._id);
+        i++; // Move to next user
+        continue;
+      }
+      
+      // We're in an active bidding period - proceed with bidding
+      console.log("🟢 In active bidding period. Proceeding with bidding for user:", user._id);
+
+      if (bidsAllowed > 0) {
+            // API endpoint for fetching projects
+            const url = "https://freelancer.com/api/projects/0.1/projects/all/";
+
+            // Parameters for the API request
+            const params = {
+              jobs: userSkillValues,
+              min_avg_price: 10,
+              project_statuses: ["active"],
+              full_description: true,
+              job_details: true,
+              user_details: true,
+              location_details: true,
+              user_status: true,
+              user_reputation: true,
+              user_country_details: true,
+              user_display_info: true,
+              user_membership_details: true,
+              user_financial_details: true,
+              compact: true,
+            };
+
+            // Make request to fetch projects
+            const response = await axios.get(url, {
+              params: params,
+              headers: headers,
+            });
+
+            // Process response data
+            const responseData = response.data;
+            const projects = responseData.result.projects;
+
+            // Extract user details for project owners
+            const ownerIds = projects.map((project) => project.owner_id);
+
+            const projectsDetails = await Promise.all(
+              ownerIds.map(async (ownerId) => {
+                if (!isNaN(ownerId)) {
+                  try {
+                    const ownerUrl = `https://freelancer.com/api/users/0.1/users/${ownerId}/`;
+                    const ownerResponse = await axios.get(ownerUrl, {
+                      params: {
+                        jobs: true,
+                        reputation: true,
+                        employer_reputation: true,
+                        reputation_extra: true,
+                        employer_reputation_extra: true,
+                        job_ranks: true,
+                        staff_details: true,
+                        completed_user_relevant_job_count: true,
+                      },
+                      headers: headers,
+                    });
+                    return ownerResponse.data.result;
+                  } catch (error) {
+                    if (error.response && error.response.status === 404) {
+                      console.error(`User with ownerId ${ownerId} not found.`);
+                      return null; // Handle 404 error gracefully
+                    } else {
+                      console.error(
+                        `Error fetching user details for ownerId ${ownerId}:`,
+                        error
+                      );
+                      throw error; // Rethrow other errors to handle them later
+                    }
+                  }
+                } else {
+                  return null;
+                }
+              })
+            );
+
+            const projects2 = responseData.result.projects.map(
+              (project, index) => ({
+                projectid: project.id,
+                type: project.type,
+                description: project.description,
+                title: project.title,
+                currencyName: project.currency.name,
+                currencySign: project.currency.sign,
+                bidCount: project.bid_stats.bid_count,
+                bidAverage: project.bid_stats.bid_avg,
+                jobNames: project.jobs.map((job) => job.name),
+                minimumBudget: project.budget.minimum,
+                maximumBudget: project.budget.maximum,
+                country: project.location.country.flag_url,
+                fullName: projectsDetails[index]?.username,
+                displayName: projectsDetails[index]?.public_name,
+                ownerCountry: projectsDetails[index]?.location?.country?.name,
+                payment: projectsDetails[index]?.status?.payment_verified,
+                email: projectsDetails[index]?.status?.email_verified,
+                deposit_made: projectsDetails[index]?.status?.deposit_made,
+                identity_verified:
+                  projectsDetails[index]?.status?.identity_verified,
+                countryShortName: projectsDetails[index]?.timezone?.country,
+                currencyCode: project.currency.code,
+              })
+            );
+
+            const filteredProjects2 = projects2.filter((project) => {
+              // Convert project's countryShortName to lowercase for case-insensitive comparison
+              const projectCountry = project.countryShortName
+                ? project.countryShortName.toLowerCase()
+                : "";
+
+              // Check if project's countryShortName matches any excluded country (case-insensitive)
+              if (
+                excludedCountries.some(
+                  (country) => country.toLowerCase() === projectCountry
+                )
+              ) {
+                return false; // Exclude project
+              }
+
+              // Check if project's jobNames include any excluded skill (case-insensitive)
+              if (
+                project.jobNames.some((skill) =>
+                  excludedSkills.includes(skill.toLowerCase())
+                )
+              ) {
+                return false; // Exclude project
+              }
+
+              // Check if clientPaymentVerified is 'yes'
+              if (clientPaymentVerified == "yes" && project.payment == null) {
+                return false; // Exclude project
+              }
+
+              // Check if clientEmailVerified is 'yes'
+              if (clientEmailVerified == "yes" && project.email !== true) {
+                return false; // Include project
+              }
+
+              // Check if clientDepositMade is 'yes'
+              if (clientDepositMade == "yes" && project.deposit_made == null) {
+                return false; // Exclude project
+              }
+
+              // Additional filters based on project type (fixed or hourly)
+              if (
+                project.type == "fixed" &&
+                project.minimumBudget <= minimumBudgetFix
+              ) {
+                return false; // Exclude project
+              }
+
+              if (
+                project.type == "hourly" &&
+                project.minimumBudget <= minimumBudgetHourly
+              ) {
+                return false; // Exclude project
+              }
+
+              return true; // Include project
+            });
+
+            const templates = await Templates.find({ userId: userId }).populate(
+              "category"
+            );
+
+            console.log("here are templates------>", templates);
+
+            // Function to randomly decide inclusion for templates with always_include = false
+            const randomlyInclude = (probability) =>
+              Math.random() < probability;
+
+            // Filter templates by category, deciding randomly for always_include = false
+            const filteredTemplates = templates.filter((template) => {
+              if (
+                template.category &&
+                template.category.always_include === true
+              ) {
+                console.log(
+                  `Including template: ${template._id} (always_include = true)`
+                );
+                return true; // Always include
+              } else if (
+                template.category &&
+                template.category.always_include === false
+              ) {
+                const include = randomlyInclude(0.5); // 50% chance to include
+                console.log(
+                  `Template: ${template._id} (always_include = false) included: ${include}`
+                );
+                return include;
+              }
+              console.log(
+                `Excluding template: ${template._id} (category not defined or always_include not specified)`
+              );
+              return false; // Exclude if category is not defined or always_include is not specified
+            });
+
+            // Group and sort filteredTemplates by category position
+            const groupedAndSortedTemplates = filteredTemplates.reduce(
+              (acc, template) => {
+                const categoryId = template.category._id.toString();
+                if (!acc[categoryId]) {
+                  acc[categoryId] = {
+                    position: template.category.position,
+                    templates: [],
+                  };
+                }
+                acc[categoryId].templates.push(template);
+                return acc;
+              },
+              {}
+            );
+
+            // Convert object to array and sort by position
+            const sortedCategories = Object.values(
+              groupedAndSortedTemplates
+            ).sort((a, b) => a.position - b.position);
+            console.log(sortedCategories);
+
+            // Function to get final content from templates for a project
+            const getFinalContentForProject = (
+              project,
+              templates,
+              ownerName,
+              userSkills
+            ) => {
+              return templates.reduce((acc, category) => {
+                const randomTemplateIndex = Math.floor(
+                  Math.random() * category.templates.length
+                );
+                const selectedTemplate =
+                  category.templates[randomTemplateIndex];
+                const matchingSkills = project.jobNames.filter((jobName) =>
+                  userSkills.includes(jobName)
+                );
+
+                const replacedContent = selectedTemplate.content
+                  .replace(/{{Project Title}}/g, project.title)
+                  .replace(/{{Owner Name}}/g, ownerName)
+                  .replace(/{{Owner Full Name}}/g, project.displayName)
+                  .replace(
+                    /{{Matching Job Skills}}/g,
+                    matchingSkills.join(", ")
+                  )
+                  .replace(/{{Job Skills}}/g, userSkills.slice(0, 5).join(", "))
+                  .replace(
+                    /{{Owner First Name}}/g,
+                    ownerName.split(" ")[0] || ownerName
+                  )
+                  .replace(/{{Country}}/g, project.ownerCountry)
+                  .replace(/{{NewLine}}/g, "\n");
+
+                return acc + replacedContent + "\n"; // Add a newline after each template
+              }, "");
+            };
+
+            console.log("Here is user just before making content: ", user);
+            const userSkills = user.skills;
+            const filteredProjectDetails = filteredProjects2.map((project) => {
+              const ownerName = project.fullName || project.displayName || "";
+              const finalContent = getFinalContentForProject(
+                project,
+                sortedCategories,
+                ownerName,
+                userSkills
+              );
+
+              return {
+                projectid: project.projectid,
+                currencyCode: project.currencyCode,
+                type: project.type,
+                title: project.title,
+                bidAverage: project.bidAverage,
+                minimumBudget: project.minimumBudget,
+                maximumBudget: project.maximumBudget,
+                fullName: project.fullName,
+                displayName: project.displayName,
+                jobNames: project.jobNames,
+                description: finalContent,
+                projectDescription: project.description,
+                bidderName: user.username,
+                bidderskills: user.skills,
+              };
+            });
+
+            // console.log(
+            //   "Final project details with descriptions:",
+            //   filteredProjectDetails
+            // );
+            const numBids = Math.min(bidsAllowed, user.bidsLimit);
+
+            const currentTime = new Date();
+            const timeLimitInMinutes = parseInt(user.timeLimit);
+            let userNew = await Users.findById(userId);
+            // Add the time limit in minutes to the current time
+            console.log(
+              "after new time : ",
+              userNew.bidStartTime,
+              timeLimitInMinutes
+            );
+            const bidEndTime = new Date(
+              userNew.bidStartTime.getTime() + timeLimitInMinutes * 60000
+            );
+            let whenToStop = new Date(userNew.bidEndTime).getTime();
+            let latestTime = Date.now();
+
+            console.log("=== INTERVAL CHECK DEBUG ===");
+            console.log("user.bidStartTime:", user.bidStartTime);
+            console.log("user.timeInterval (minutes):", user.timeInterval);
+            console.log("Current time:", new Date());
+            console.log("Last bid time:", new Date(user.bidStartTime));
+            const nextBidTime = new Date(new Date(user.bidStartTime).getTime() + user.timeInterval * 60000);
+            console.log("Next bid allowed at:", nextBidTime);
+            const intervalResult = isIntervalHit(user.bidStartTime, user.timeInterval);
+            console.log("isIntervalHit result:", intervalResult);
+
+            if (intervalResult) {
+              console.log("✅ Time interval has passed - proceeding with bidding");
+              for (let i = 0; i < filteredProjectDetails.length; i++) {
+                const project = filteredProjectDetails[i];
+                console.log("here is project", project);
+                const extractedData = {
+                  title: project.title,
+                  jobNames: project.jobNames,
+                  projectDescription: project.projectDescription,
+                  myName: project.bidderName,
+                  mySkills: project.bidderskills,
+                  clientName: project.fullName,
+                  clientDisplayName: project.displayName,
+                  currencyCode: project.currencyCode,
+                  type: project.type,
+                  minimumBudget: project.minimumBudget,
+                  maximumBudget: project.maximumBudget,
+                  bidAverage: project.bidAverage,
+                };
+                console.log("extrected data: ", extractedData);
+                console.log("user ai bid value : ", user.aiBid);
+                if (user.aiBid) {
+                  const prompt = `I am providing examples of proposals to guide the tone and structure for this task:
+                              EXAMPLE 1
+                              As a seasoned cryptocurrency and technology enthusiast with over five years of experience in fields such as Bitcoin, Mobile Applications, and PHP, I am confident that I am the ideal candidate for this urgent project. My expertise in Android/iOS app development, web and mobile application design—from E-commerce to Cryptocurrencies—allows me to offer an innovative and effective Social Media Engagement and Cryptocurrency Performance web application.
+                              
+                              With extensive experience in developing Social Networking apps, Mobile Ads integration, E-learning tools, and more, I excel at understanding clients' needs and delivering exceptional results. Expect consistent communication, reliable support, and detailed status reports. Partnering with me means your project will be handled with professionalism and expertise. Thank you!
+                              
+                              EXAMPLE 2
+                              My name is Stelian, and I am a full-stack developer with over a decade of experience. I've built numerous applications using various technical stacks, with extensive work in C# and JavaScript—key languages for your project.
+                              
+                              In addition to my C# programming skills, I have a strong background in Windows desktop environments. My experience aligns perfectly with decrypting and modifying complex programs. Though I may not have access to specific codes, my expertise in debugging and reverse engineering will be instrumental. My familiarity with AWS deployment and Linux System Administration further enhances my ability to optimize project performance and security.
+                              
+                              Now, keeping these examples in mind, please create a proposal for a project I found on Freelancer.com. Here are the details:
+                              Title of project: ${extractedData.title}
+                              skills which are required for project: ${
+                                extractedData.jobNames
+                              }
+                              Description of project: ${
+                                extractedData.projectDescription
+                              }
+                              Client name who posted it : ${
+                                extractedData.clientName ||
+                                extractedData.clientDisplayName
+                              }
+                               My Name: ${extractedData.myName}
+                               My Skills: ${extractedData.mySkills}
+                              
+                              Write a proposal that follows the structure and tone of the provided examples. The proposal should be written in a conversational, human-like manner, not exceed 200 words, and include a closing statement inviting further discussion. Provide only the main body of the proposal, starting with the greeting and ending with the closing statement, without including the title or other details.`;
+                  const result = await getChatGptResponse(prompt);
+
+                  if (result) {
+                    console.log(" chat 3 ", result);
+                    project.description = result; // Replace project description with the generated proposal
+                  }
+                }
+                // Extract project details
+                const {
+                  projectid,
+                  minimumBudget,
+                  maximumBudget,
+                  description,
+                  bidAverage,
+                  title,
+                  fullName,
+                  currencyCode,
+                  type,
+                } = project;
+
+                const filterObject = await Biddingprice.findOne({
+                  user: user._id,
+                });
+
+                let bidderid = parseInt(user.id);
+                let projectID = parseInt(projectid);
+
+                const currencyMap = {
+                  USD: "usd_aud_cad",
+                  AUD: "usd_aud_cad",
+                  CAD: "usd_aud_cad",
+                  GBP: "gbp",
+                  EUR: "eur",
+                  INR: "inr",
+                  SGD: "nzd_sgd",
+                  NZD: "nzd_sgd",
+                  HKD: "hkd",
+                };
+                const bidValue = getBidValue(project, filterObject, user);
+                console.log("project: ", project);
+                console.log("filterObject :", filterObject);
+                console.log("user :", user);
+                console.log("Bidder ID:", bidderid);
+                console.log("Project ID:", projectID);
+                console.log("maximum Money:", maximumBudget);
+                console.log("Bid Money:", bidValue);
+                console.log("project Description: ", description);
+                // Prepare the bid request body
+                const bidRequestBody = {
+                  project_id: projectID,
+                  bidder_id: bidderid,
+                  amount: bidValue,
+                  period: 3,
+                  milestone_percentage: 50,
+                  description: description,
+                };
+
+                // Make the POST request to Freelancer API
+                const response = await fetch(
+                  `https://www.freelancer.com/api/projects/0.1/bids/`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "freelancer-oauth-v1": accessToken,
+                    },
+                    body: JSON.stringify(bidRequestBody),
+                  }
+                );
+
+                // Parse the JSON response
+                const responseData = await response.json();
+
+                // Log response
+                console.log("Bid Response: ", responseData);
+                if (
+                  responseData.error_code ===
+                  "ProjectExceptionCodes.DUPLICATE_BID"
+                ) {
+                  console.log(
+                    "Already bid on this project. Trying the next one..."
+                  );
+                  continue;
+                } else {
+                  console.log("User Id :", user._id);
+                  if (responseData.status == "error") {
+                    const date = new Date().toISOString().split("T")[0];
+                    const newRecord = await Projects.create({
+                      // Define the fields of the new record
+                      bidDescription: responseData.message,
+                      projectTitle: project.title,
+                      bidAmount: bidValue,
+                      userName: project.fullName,
+                      status: 1,
+                      time: date,
+                      user: user._id,
+                      // Add more fields as needed
+                    });
+                    await Users.updateOne(
+                      { _id: user._id },
+                      {
+                        $inc: {
+                          bidsAllow: -1,
+                          bidsLimit: -1,
+                        },
+                      }
+                    );
+
+                    if (user.bidsLimit <= 0) {
+                      let updatingAutoBid = await Users.findOneAndUpdate(
+                        { _id: user._id },
+                        { $set: { autoBid: false } }, // Update operation to set the `bidStartTime` field
+                        { new: true } // Option to return the updated document
+                      );
+                    }
+
+                    console.log(
+                      "bidEndTime on project FAILED: ",
+                      user.bidEndTime
+                    );
+                    console.log(
+                      "bidEndTime on project FAILED which was calculated: ",
+                      bidEndTime
+                    );
+
+                    if (!user.bidEndTime) {
+                      let updatingStartTime = await Users.findOneAndUpdate(
+                        { _id: user._id },
+                        {
+                          $set: {
+                            bidStartTime: currentTime,
+                            bidEndTime: bidEndTime,
+                          },
+                        },
+                        { new: true }
+                      );
+                    }
+                    // Decrease bidsAllowed by 1 for the user if bid was successful
+                  }
+
+                  if (responseData.status !== "error") {
+                    let dateString = responseData.result.submitdate;
+                    const date = new Date().toISOString().split("T")[0];
+                    const newRecord = await Projects.create({
+                      // Define the fields of the new record
+                      bidDescription: description,
+                      projectTitle: title,
+                      bidAmount: responseData.result.amount,
+                      userName: fullName,
+                      time: date,
+                      user: user._id,
+                      // Add more fields as needed
+                    });
+                    // Decrease bidsAllowed by 1 for the user if bid was successful
+                    bidsAllowed = bidsAllowed - 1;
+
+                    await Users.updateOne(
+                      { _id: user._id },
+                      {
+                        $inc: {
+                          bidsAllow: -1,
+                          bidsLimit: -1,
+                        },
+                      }
+                    );
+
+                    if (user.bidsLimit <= 0) {
+                      let updatingAutoBid = await Users.findOneAndUpdate(
+                        { _id: user._id },
+                        { $set: { autoBid: false } }, // Update operation to set the `bidStartTime` field
+                        { new: true } // Option to return the updated document
+                      );
+                    }
+
+                    console.log(
+                      "bidEndTime on project success: ",
+                      user.bidEndTime
+                    );
+                    console.log(
+                      "bidEndTime on project success which was calculated: ",
+                      bidEndTime
+                    );
+                    if (!user.bidEndTime) {
+                      let updatingStartTime = await Users.findOneAndUpdate(
+                        { _id: user._id },
+                        {
+                          $set: {
+                            bidStartTime: currentTime,
+                            bidEndTime: bidEndTime,
+                          },
+                        },
+                        { new: true }
+                      );
+                    }
+                  }
+                  break;
+                }
+              }
+            } else {
+              console.log("❌ No bids allowed remaining for user:", user._id);
+            }
+          } else {
+            console.log("❌ User has no remaining bids allowed");
+          }
+        }
+      } else {
+        console.log("❌ User has no bids allowed (bidsAllowed <= 0)");
+      }
+      
+      console.log("Moving to the next user...");
+      i++;
     }
-    
-    console.log("✅ All users processed successfully");
+    console.log("all users done");
     return "Processing complete for all users with autoBid on";
   } catch (error) {
-    console.error("❌ Error in processAutoBids:", error);
+    console.error("Error occurred:", error);
     throw error;
   }
 }
 
 // Function to calculate a fallback bid
-// Function to calculate a fallback bid
 function calculateFallbackBid(bidAverage, minimumBudget, maximumBudget, user) {
-  // Always use bid average as the baseline
-  if (bidAverage && bidAverage > 0) {
-    // Add a small premium (5-15%) to the average bid
-    const premium = 1 + (Math.random() * 0.1 + 0.05); // Random premium between 5-15%
-    let suggestedBid = Math.round(bidAverage * premium);
-    
-    // Ensure bid is within project's maximum budget if specified
-    if (maximumBudget && maximumBudget > 0) {
-      suggestedBid = Math.min(suggestedBid, maximumBudget);
-    }
-    
-    // Ensure bid is not less than user's minimum
-    const userMinimum = parseInt(user.minimum_budget_fixed) || minimumBudget || 30;
-    suggestedBid = Math.max(suggestedBid, userMinimum);
-    
-    console.log(`💰 Calculated bid: ${suggestedBid} (Avg: ${bidAverage}, Premium: ${Math.round((premium-1)*100)}%)`);
-    return suggestedBid;
-  }
   let averageBid = parseInt(bidAverage);
   let lowRange = parseInt(user.lower_bid_range);
   let highRange = parseInt(user.higher_bid_range);
@@ -5593,108 +5615,6 @@ router.get("/start-fresh-session", async (req, res) => {
     }
   } catch (error) {
     res.json({ success: false, error: error.message });
-  }
-});
-
-// Quick toggle autoBid for testing
-router.get("/toggle-autobid", sessionChecker, async (req, res) => {
-  try {
-    const userId = req.session.user._id;
-    const user = await Users.findById(userId);
-    
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    
-    const newAutoBidStatus = !user.autoBid;
-    
-    const result = await Users.findOneAndUpdate(
-      { _id: userId },
-      {
-        $set: {
-          autoBid: newAutoBidStatus,
-          ...(newAutoBidStatus && {
-            bidStartTime: null,
-            bidEndTime: null,
-            breakTime: null,
-          })
-        },
-      },
-      { new: true }
-    );
-    
-    res.json({ 
-      success: true,
-      message: `AutoBid ${newAutoBidStatus ? 'enabled' : 'disabled'} successfully`,
-      autoBid: newAutoBidStatus,
-      bidsAllow: result.bidsAllow,
-      bidsLimit: result.bidsLimit,
-      timeLimit: result.timeLimit,
-      timeInterval: result.timeInterval
-    });
-  } catch (error) {
-    console.error("Error toggling autoBid:", error);
-    res.status(500).json({ error: "Failed to toggle autoBid" });
-  }
-});
-
-// Get current autoBid status with real-time session info
-router.get("/autobid-status", sessionChecker, async (req, res) => {
-  try {
-    const userId = req.session.user._id;
-    const user = await Users.findById(userId);
-    
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    
-    const currentTime = new Date();
-    let sessionStatus = "inactive";
-    let timeUntilNextCycle = null;
-    let sessionTimeRemaining = null;
-    
-    if (user.autoBid && user.bidStartTime) {
-      const sessionStartTime = new Date(user.bidStartTime);
-      const timeLimitInMinutes = parseInt(user.timeLimit) || 30;
-      const timeIntervalInMinutes = parseInt(user.timeInterval) || 2;
-      const sessionEndTime = new Date(sessionStartTime.getTime() + timeLimitInMinutes * 60000);
-      
-      sessionTimeRemaining = Math.floor((sessionEndTime.getTime() - currentTime.getTime()) / 1000);
-      
-      if (currentTime < sessionEndTime) {
-        const timeSinceStart = currentTime.getTime() - sessionStartTime.getTime();
-        const cyclesCompleted = Math.floor(timeSinceStart / (timeIntervalInMinutes * 60000));
-        const nextCycleStartTime = new Date(sessionStartTime.getTime() + (cyclesCompleted + 1) * timeIntervalInMinutes * 60000);
-        
-        if (currentTime >= nextCycleStartTime) {
-          sessionStatus = "active";
-        } else {
-          sessionStatus = "break";
-          timeUntilNextCycle = Math.floor((nextCycleStartTime.getTime() - currentTime.getTime()) / 1000);
-        }
-      } else {
-        sessionStatus = "expired";
-        sessionTimeRemaining = 0;
-      }
-    }
-    
-    res.json({
-      success: true,
-      autoBid: user.autoBid,
-      bidsAllow: user.bidsAllow,
-      bidsLimit: user.bidsLimit,
-      timeLimit: user.timeLimit,
-      timeInterval: user.timeInterval,
-      bidStartTime: user.bidStartTime,
-      sessionStatus: sessionStatus,
-      timeUntilNextCycle: timeUntilNextCycle,
-      sessionTimeRemaining: sessionTimeRemaining,
-      currentTime: currentTime.toISOString(),
-      username: user.username
-    });
-  } catch (error) {
-    console.error("Error getting autoBid status:", error);
-    res.status(500).json({ error: "Failed to get autoBid status" });
   }
 });
 

@@ -133,6 +133,25 @@
 				</nav>
 
 				<div class="container-fluid">
+	<div class="card mb-4">
+		<div class="card-body">
+			<h5 class="card-title">Bidding Analytics</h5>
+			<div id="biddingStats">
+			  <b>Total Bids:</b> <span id="totalBids">...</span><br>
+			  <b>Successful:</b> <span id="successBids">...</span><br>
+			  <b>Failed:</b> <span id="failedBids">...</span><br>
+			  <b>Win Rate:</b> <span id="winRate">...</span>%
+			</div>
+			<canvas id="biddingChart" height="100"></canvas>
+		</div>
+	</div>
+	<div class="card mb-4">
+		<div class="card-body">
+			<h5 class="card-title">AI Bidding Controls</h5>
+			<button id="aiBiddingOn" class="btn btn-success mr-2">Turn ON</button>
+			<button id="aiBiddingOff" class="btn btn-danger">Turn OFF</button>
+		</div>
+	</div>
 
 
 
@@ -273,6 +292,34 @@
 	<script src="/assets/sb-admin-2.min.js?v=6"></script>
 	<script src="/assets/jquery.dataTables.min.js"></script>
 	<script src="/assets/dataTables.bootstrap4.min.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+		<script>
+			// Fetch analytics data from backend
+			$.get('/api/bidding-analytics', function(data) {
+				$('#totalBids').text(data.total);
+				$('#successBids').text(data.success);
+				$('#failedBids').text(data.failed);
+				$('#winRate').text(data.winRate);
+				new Chart(document.getElementById('biddingChart'), {
+					type: 'line',
+					data: data.chartData
+				});
+			});
+		</script>
+		<script>
+			$('#aiBiddingOn').click(function() {
+				$.get('/autoBidTurnOn?autoBid=ON', function() {
+					alert('AI Bidding turned ON! Autobid will start immediately with current conditions.');
+					location.reload();
+				});
+			});
+			$('#aiBiddingOff').click(function() {
+				$.get('/autoBidTurnOn?autoBid=OFF', function() {
+					alert('AI Bidding turned OFF!');
+					location.reload();
+				});
+			});
+		</script>
 	<script>
 		// Check if the success parameter is present in the URL
 		const urlParams = new URLSearchParams(window.location.search);

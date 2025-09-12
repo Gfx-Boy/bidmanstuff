@@ -593,7 +593,7 @@
 										src="<%= user.profilePicture ? user.profilePicture : 'https://cdn3.f-cdn.com/ppic/245304646/logo/75311776/profile_logo_75311776.jpg' %>">
 								</span>
 							</a>
-							<div class="dropdown-menu dropdown-menu-right shadow animated--grow-in"
+							<div style="z-index: 10000;" class="dropdown-menu dropdown-menu-right shadow animated--grow-in"
 								aria-labelledby="userDropdown">
 								<a class="dropdown-item text-success"
 									href="/autoBidTurnOn?autoBid=<%= userAutoBid === 'ON' ? 'Off' : 'ON' %>"
