@@ -4516,7 +4516,65 @@ async function processAutoBids() {
           error.response?.data?.message || error.message);
       }
       
+      // STEP 1: Get user's existing bid history to exclude those projects from search
+      console.log("📊 Fetching user's existing bid history to optimize search...");
+      let userBidProjectIds = [];
+      
+      try {
+        // Get freelancer ID first for bid history
+        const profileResponse = await axios.get(
+          'https://www.freelancer.com/api/users/0.1/self/',
+          {
+            headers: {
+              'Freelancer-OAuth-V1': accessToken,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        if (profileResponse.data?.result?.id) {
+          const freelancerId = profileResponse.data.result.id;
+          console.log("✅ Got Freelancer ID for bid history:", freelancerId);
+          
+          // Get all current bids by this user (last 200 to be comprehensive)
+          const userBidsResponse = await axios.get(
+            'https://www.freelancer.com/api/projects/0.1/bids/',
+            {
+              params: {
+                bidders: [freelancerId],
+                limit: 200, // Get comprehensive history
+                sort_field: 'submitdate',
+                sort_order: 'desc'
+              },
+              headers: {
+                'Freelancer-OAuth-V1': accessToken,
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+
+          if (userBidsResponse.data?.result?.bids) {
+            userBidProjectIds = userBidsResponse.data.result.bids.map(bid => 
+              bid.project_id
+            );
+            
+            console.log(`📊 Found ${userBidProjectIds.length} projects already bid on - will exclude from search`);
+            
+            // Update local tracking with actual data
+            await Users.updateOne(
+              { _id: user._id },
+              { $set: { bidProjectIds: userBidProjectIds.map(id => id.toString()) } }
+            );
+          }
+        }
+      } catch (bidHistoryError) {
+        console.log("⚠️ Could not fetch bid history, proceeding with search:", bidHistoryError.message);
+        // Use existing local tracking as fallback
+        userBidProjectIds = user.bidProjectIds ? user.bidProjectIds.map(id => parseInt(id)) : [];
+      }
+      
       console.log("🔍 Searching for projects with", userSkillValues.length, "skills");
+      console.log("🚫 Excluding", userBidProjectIds.length, "already-bid projects from search");
       
       try {
         // API endpoint for fetching projects
@@ -4528,8 +4586,11 @@ async function processAutoBids() {
           project_statuses: ["active"],
           sort_field: "submitdate",
           sort_order: "desc",
-          limit: 10,
+          limit: 20, // Increased limit since we're pre-filtering
           offset: 0,
+          
+          // EXCLUDE ALREADY-BID PROJECTS FROM SEARCH
+          excluded_projects: userBidProjectIds.length > 0 ? userBidProjectIds : undefined,
           
           // Budget filters
           min_avg_price: Math.max(user.lower_bid_range || 10, minimumBudgetFix || 0),
@@ -4709,116 +4770,21 @@ async function processAutoBids() {
 
         // Process only one project per cycle
         if (filteredProjects.length > 0) {
-          // Initialize bid tracking array if it doesn't exist
-          if (!user.bidProjectIds) {
-            try {
-              await Users.findOneAndUpdate(
-                { _id: user._id },
-                { $set: { bidProjectIds: [] } },
-                { new: true }
-              );
-              user.bidProjectIds = [];
-              console.log("✅ Initialized bidProjectIds array for user");
-            } catch (initError) {
-              console.log("⚠️ Could not initialize bidProjectIds, using empty array");
-              user.bidProjectIds = [];
-            }
-          }
-
-          // Sync bidProjectIds with actual bids from Freelancer API
-          try {
-            console.log("🔄 Syncing bid tracking with Freelancer API...");
-            
-            // Get freelancer ID first
-            const profileResponse = await axios.get(
-              'https://www.freelancer.com/api/users/0.1/self/',
-              {
-                headers: {
-                  'Freelancer-OAuth-V1': accessToken,
-                  'Content-Type': 'application/json'
-                }
-              }
-            );
-
-            if (profileResponse.data?.result?.id) {
-              const freelancerId = profileResponse.data.result.id;
-              
-              // Get all current bids by this user
-              const userBidsResponse = await axios.get(
-                'https://www.freelancer.com/api/projects/0.1/bids/',
-                {
-                  params: {
-                    bidders: [freelancerId],
-                    limit: 100, // Adjust based on needs
-                    sort_field: 'submitdate',
-                    sort_order: 'desc'
-                  },
-                  headers: {
-                    'Freelancer-OAuth-V1': accessToken,
-                    'Content-Type': 'application/json'
-                  }
-                }
-              );
-
-              if (userBidsResponse.data?.result?.bids) {
-                const actualBidProjectIds = userBidsResponse.data.result.bids.map(bid => 
-                  bid.project_id.toString()
-                );
-                
-                console.log(`📊 Found ${actualBidProjectIds.length} existing bids for user`);
-                
-                // Update the bid tracking array with actual data
-                user.bidProjectIds = [...new Set([...user.bidProjectIds, ...actualBidProjectIds])];
-                
-                // Cleanup: Keep only the most recent 500 project IDs to prevent array from growing too large
-                if (user.bidProjectIds.length > 500) {
-                  user.bidProjectIds = user.bidProjectIds.slice(-500);
-                  console.log("🧹 Cleaned up bid tracking array, keeping latest 500 entries");
-                }
-                
-                await Users.updateOne(
-                  { _id: user._id },
-                  { $set: { bidProjectIds: user.bidProjectIds } }
-                );
-                
-                console.log(`✅ Bid tracking synced with API data (${user.bidProjectIds.length} projects tracked)`);
-              }
-            }
-          } catch (syncError) {
-            console.log("⚠️ Could not sync with API, using existing bid tracking:", syncError.message);
-          }
-
-          // Filter out projects that have already been bid on by this user
-          const unbidProjects = filteredProjects.filter(project => 
-            !user.bidProjectIds.includes(project.projectid.toString())
-          );
+          // Projects are already pre-filtered to exclude already-bid projects
+          console.log("✅ Found", filteredProjects.length, "new projects (already-bid projects excluded from search)");
 
           let project;
-          if (unbidProjects.length === 0) {
-            console.log("🔄 All available projects have been processed. Clearing bid history to start fresh cycle.");
-            // Reset the bid tracking array to allow bidding on projects again
-            try {
-              await Users.findOneAndUpdate(
-                { _id: user._id },
-                { $set: { bidProjectIds: [] } },
-                { new: true }
-              );
-              console.log("✅ Bid history cleared successfully");
-            } catch (clearError) {
-              console.log("⚠️ Could not clear bid history, continuing with existing projects");
-            }
-            
-            // Select the first project from the original list
-            project = filteredProjects[0];
-            console.log("🎯 Processing project (fresh cycle):", project.title);
+          if (filteredProjects.length === 0) {
+            console.log("🔄 No new projects available. All current projects have been processed.");
+            continue; // Move to next user
           } else {
             // Use round-robin selection to ensure project variety
             const cyclesCompleted = Math.floor((new Date().getTime() - new Date(user.bidStartTime).getTime()) / (parseInt(user.timeInterval || 2) * 60000));
-            const projectIndex = cyclesCompleted % unbidProjects.length;
-            project = unbidProjects[projectIndex];
+            const projectIndex = cyclesCompleted % filteredProjects.length;
+            project = filteredProjects[projectIndex];
             
             console.log("🎯 Processing project:", project.title);
-            console.log("📊 Projects remaining in cycle:", unbidProjects.length);
+            console.log("📊 Available projects in cycle:", filteredProjects.length);
             console.log("🔄 Using round-robin selection (cycle", cyclesCompleted, "-> project", projectIndex, ")");
           }
 
@@ -4963,15 +4929,15 @@ I hope you're doing well! I came across your ${project.title} project and I'm re
 
 Here's why I'm the perfect fit for your project:
 
-✅ **Expertise in Required Skills:** I have extensive experience in ${projectSkills}, which perfectly matches what you need for this project.
+✅ Expertise in Required Skills: I have extensive experience in ${projectSkills}, which perfectly matches what you need for this project.
 
-✅ **Understanding Your Vision:** I've carefully reviewed your project requirements and I understand exactly what you're looking for. Your budget of ${budgetInfo} is very reasonable for the scope of work.
+✅ Understanding Your Vision: I've carefully reviewed your project requirements and I understand exactly what you're looking for. Your budget of ${budgetInfo} is very reasonable for the scope of work.
 
-✅ **Quality & Communication:** I believe in delivering high-quality work with excellent communication throughout the project. You'll get regular updates and quick responses to all your messages.
+✅ Quality & Communication: I believe in delivering high-quality work with excellent communication throughout the project. You'll get regular updates and quick responses to all your messages.
 
-✅ **Proven Track Record:** I have successfully completed similar projects and I'm confident I can exceed your expectations on this one too.
+✅ Proven Track Record: I have successfully completed similar projects and I'm confident I can exceed your expectations on this one too.
 
-**My Approach:**
+My Approach:
 - Thorough analysis of your requirements
 - Regular progress updates and communication
 - Quality-focused development/work
@@ -5102,18 +5068,12 @@ Best regards`;
             if (bidResponse.data.status === 'success') {
               console.log("✅ Bid submitted successfully for", project.title);
               
-              // Track this project ID to avoid bidding on it again
-              if (!user.bidProjectIds) {
-                user.bidProjectIds = [];
-              }
-              user.bidProjectIds.push(project.projectid.toString());
-              
-              // Update bid counts and save bid tracking
+              // Track this project ID to avoid bidding on it again in future cycles
               await Users.updateOne(
                 { _id: user._id },
                 { 
                   $inc: { bidsAllow: -1, bidsLimit: -1 },
-                  $set: { bidProjectIds: user.bidProjectIds }
+                  $addToSet: { bidProjectIds: project.projectid.toString() } // Use addToSet to prevent duplicates
                 }
               );
 
@@ -5129,13 +5089,9 @@ Best regards`;
             } else {
               console.log("❌ Bid submission failed:", bidResponse.data.message);
               // Even if bid failed, track the project to avoid repeated failed attempts
-              if (!user.bidProjectIds) {
-                user.bidProjectIds = [];
-              }
-              user.bidProjectIds.push(project.projectid.toString());
               await Users.updateOne(
                 { _id: user._id },
-                { $set: { bidProjectIds: user.bidProjectIds } }
+                { $addToSet: { bidProjectIds: project.projectid.toString() } }
               );
             }
           } catch (bidError) {
@@ -5163,33 +5119,22 @@ Best regards`;
                   }
                   
                   // Only add if not already tracked
-                  if (!user.bidProjectIds.includes(project.projectid.toString())) {
-                    user.bidProjectIds.push(project.projectid.toString());
-                    await Users.updateOne(
-                      { _id: user._id },
-                      { $set: { bidProjectIds: user.bidProjectIds } }
-                    );
-                    console.log("✅ Project added to bid tracking list to prevent future attempts");
-                  } else {
-                    console.log("⚠️ Project was already in tracking list - sync issue detected");
-                  }
+                  await Users.updateOne(
+                    { _id: user._id },
+                    { $addToSet: { bidProjectIds: project.projectid.toString() } }
+                  );
+                  console.log("✅ Project added to bid tracking list to prevent future attempts");
                 } else {
                   console.log("❌ 409 error but not related to duplicate bids:", errorMessage);
                 }
               } else if (bidError.response.status === 400) {
                 console.log("❌ Bad request error - check bid parameters");
                 // Track project to avoid repeated failed attempts
-                if (!user.bidProjectIds) {
-                  user.bidProjectIds = [];
-                }
-                if (!user.bidProjectIds.includes(project.projectid.toString())) {
-                  user.bidProjectIds.push(project.projectid.toString());
-                  await Users.updateOne(
-                    { _id: user._id },
-                    { $set: { bidProjectIds: user.bidProjectIds } }
-                  );
-                  console.log("✅ Project marked as unbiddable (400 error) to prevent future attempts");
-                }
+                await Users.updateOne(
+                  { _id: user._id },
+                  { $addToSet: { bidProjectIds: project.projectid.toString() } }
+                );
+                console.log("✅ Project marked as unbiddable (400 error) to prevent future attempts");
               } else if (bidError.response.status === 401) {
                 console.log("❌ Authentication error - access token may be invalid");
               } else if (bidError.response.status === 403) {
@@ -5198,34 +5143,20 @@ Best regards`;
                 console.log("📋 Error details:", errorMessage);
                 
                 // Track this project as unbiddable (Preferred Freelancer requirement, etc.)
-                if (!user.bidProjectIds) {
-                  user.bidProjectIds = [];
-                }
-                if (!user.bidProjectIds.includes(project.projectid.toString())) {
-                  user.bidProjectIds.push(project.projectid.toString());
-                  await Users.updateOne(
-                    { _id: user._id },
-                    { $set: { bidProjectIds: user.bidProjectIds } }
-                  );
-                  console.log("✅ Project marked as unbiddable (403 forbidden) to prevent future attempts");
-                  console.log("📋 Reason: User lacks required permissions for this project type");
-                } else {
-                  console.log("⚠️ Project was already marked as unbiddable");
-                }
+                await Users.updateOne(
+                  { _id: user._id },
+                  { $addToSet: { bidProjectIds: project.projectid.toString() } }
+                );
+                console.log("✅ Project marked as unbiddable (403 forbidden) to prevent future attempts");
+                console.log("📋 Reason: User lacks required permissions for this project type");
               } else {
                 console.log(`❌ Unexpected error status: ${bidError.response.status}`);
                 // Track any other error status to avoid repeated attempts
-                if (!user.bidProjectIds) {
-                  user.bidProjectIds = [];
-                }
-                if (!user.bidProjectIds.includes(project.projectid.toString())) {
-                  user.bidProjectIds.push(project.projectid.toString());
-                  await Users.updateOne(
-                    { _id: user._id },
-                    { $set: { bidProjectIds: user.bidProjectIds } }
-                  );
-                  console.log(`✅ Project marked as unbiddable (${bidError.response.status} error) to prevent future attempts`);
-                }
+                await Users.updateOne(
+                  { _id: user._id },
+                  { $addToSet: { bidProjectIds: project.projectid.toString() } }
+                );
+                console.log(`✅ Project marked as unbiddable (${bidError.response.status} error) to prevent future attempts`);
               }
             }
             continue;
