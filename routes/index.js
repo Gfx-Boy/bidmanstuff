@@ -4343,6 +4343,104 @@ router.post("/admin/resetPassword", isAdmin, async (req, res) => {
   }
 });
 
+// Comprehensive bid history cleanup function
+async function initializeBidHistory(user) {
+  console.log("\n🔄 ===== INITIALIZING BID HISTORY CLEANUP =====");
+  let allBidProjectIds = [];
+  
+  try {
+    // Step 1: Get freelancer ID first for API requests
+    const profileResponse = await axios.get(
+      'https://www.freelancer.com/api/users/0.1/self/',
+      {
+        headers: {
+          'Freelancer-OAuth-V1': user.access_token,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (profileResponse.data?.result?.id) {
+      const freelancerId = profileResponse.data.result.id;
+      console.log("✅ Got Freelancer ID for bid history:", freelancerId);
+      
+      // Step 2: Try to get bid history from Freelancer API
+      console.log("📡 Fetching bid history from Freelancer API...");
+      const userBidsResponse = await axios.get(
+        'https://www.freelancer.com/api/projects/0.1/bids/',
+        {
+          params: {
+            bidders: [freelancerId],
+            limit: 500, // Get comprehensive history
+            sort_field: 'submitdate',
+            sort_order: 'desc'
+          },
+          headers: {
+            'Freelancer-OAuth-V1': user.access_token,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (userBidsResponse.data?.result?.bids) {
+        const apiBidProjectIds = userBidsResponse.data.result.bids.map(bid => parseInt(bid.project_id));
+        allBidProjectIds.push(...apiBidProjectIds);
+        console.log(`✅ Found ${apiBidProjectIds.length} projects from API`);
+      }
+    }
+  } catch (apiError) {
+    console.log("⚠️ API fetch failed:", apiError.message);
+  }
+
+  try {
+    // Step 3: Try to get additional bid history from bid insights page
+    console.log("🌐 Fetching additional bid history from insights page...");
+    const bidInsightsResponse = await axios.get('https://www.freelancer.com/users/insights/bids', {
+      headers: {
+        'Cookie': `fl_user_token=${user.freelancerToken};`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+
+    const htmlContent = bidInsightsResponse.data;
+    const projectIdMatches = htmlContent.match(/project-id["\s]*[=:]["\s]*(\d+)/gi);
+    
+    if (projectIdMatches && projectIdMatches.length > 0) {
+      const insightsBidProjectIds = projectIdMatches.map(match => {
+        const idMatch = match.match(/(\d+)/);
+        return idMatch ? parseInt(idMatch[1]) : null;
+      }).filter(id => id !== null);
+      
+      allBidProjectIds.push(...insightsBidProjectIds);
+      console.log(`✅ Found ${insightsBidProjectIds.length} additional projects from insights page`);
+    }
+  } catch (insightsError) {
+    console.log("⚠️ Insights page fetch failed:", insightsError.message);
+  }
+
+  // Step 4: Merge with existing database data
+  const existingBidIds = user.bidProjectIds || [];
+  allBidProjectIds.push(...existingBidIds.map(id => parseInt(id)));
+
+  // Remove duplicates and create final list
+  const uniqueBidProjectIds = [...new Set(allBidProjectIds)];
+  
+  console.log(`📊 TOTAL PROJECTS TO EXCLUDE: ${uniqueBidProjectIds.length}`);
+  console.log(`   - From API: ${allBidProjectIds.filter((id, index, arr) => arr.indexOf(id) === index && id !== null).length}`);
+  console.log(`   - From Database: ${existingBidIds.length}`);
+
+  // Step 5: Update database with comprehensive list
+  await Users.updateOne(
+    { _id: user._id },
+    { $set: { bidProjectIds: uniqueBidProjectIds.map(id => id.toString()) } }
+  );
+
+  console.log("✅ Bid history cleanup completed successfully!");
+  console.log("===== BID HISTORY INITIALIZATION DONE =====\n");
+  
+  return uniqueBidProjectIds;
+}
+
 async function processAutoBids() {
   try {
     console.log("ðŸš€ Starting processAutoBids function with real-time logic");
@@ -4516,63 +4614,15 @@ async function processAutoBids() {
           error.response?.data?.message || error.message);
       }
       
-      // STEP 1: Get user's existing bid history to exclude those projects from search
-      console.log("📊 Fetching user's existing bid history to optimize search...");
-      let userBidProjectIds = [];
+      // ===== COMPREHENSIVE BID HISTORY INITIALIZATION =====
+      console.log("🔄 Starting comprehensive bid history cleanup at session start...");
+      const userBidProjectIds = await initializeBidHistory(user);
       
-      try {
-        // Get freelancer ID first for bid history
-        const profileResponse = await axios.get(
-          'https://www.freelancer.com/api/users/0.1/self/',
-          {
-            headers: {
-              'Freelancer-OAuth-V1': accessToken,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
+      console.log(`� Will exclude ${userBidProjectIds.length} already-bid projects from all searches`);
 
-        if (profileResponse.data?.result?.id) {
-          const freelancerId = profileResponse.data.result.id;
-          console.log("✅ Got Freelancer ID for bid history:", freelancerId);
-          
-          // Get all current bids by this user (last 200 to be comprehensive)
-          const userBidsResponse = await axios.get(
-            'https://www.freelancer.com/api/projects/0.1/bids/',
-            {
-              params: {
-                bidders: [freelancerId],
-                limit: 200, // Get comprehensive history
-                sort_field: 'submitdate',
-                sort_order: 'desc'
-              },
-              headers: {
-                'Freelancer-OAuth-V1': accessToken,
-                'Content-Type': 'application/json'
-              }
-            }
-          );
-
-          if (userBidsResponse.data?.result?.bids) {
-            userBidProjectIds = userBidsResponse.data.result.bids.map(bid => 
-              bid.project_id
-            );
-            
-            console.log(`📊 Found ${userBidProjectIds.length} projects already bid on - will exclude from search`);
-            
-            // Update local tracking with actual data
-            await Users.updateOne(
-              { _id: user._id },
-              { $set: { bidProjectIds: userBidProjectIds.map(id => id.toString()) } }
-            );
-          }
-        }
-      } catch (bidHistoryError) {
-        console.log("⚠️ Could not fetch bid history, proceeding with search:", bidHistoryError.message);
-        // Use existing local tracking as fallback
-        userBidProjectIds = user.bidProjectIds ? user.bidProjectIds.map(id => parseInt(id)) : [];
-      }
+      // ===== PROCEED WITH CLEAN PROJECT SEARCH =====
       
+      // ===== PROCEED WITH CLEAN PROJECT SEARCH =====
       console.log("🔍 Searching for projects with", userSkillValues.length, "skills");
       console.log("🚫 Excluding", userBidProjectIds.length, "already-bid projects from search");
       
@@ -4586,11 +4636,11 @@ async function processAutoBids() {
           project_statuses: ["active"],
           sort_field: "submitdate",
           sort_order: "desc",
-          limit: 20, // Increased limit since we're pre-filtering
+          limit: 50, // Increased limit since we'll filter post-search
           offset: 0,
           
-          // EXCLUDE ALREADY-BID PROJECTS FROM SEARCH
-          excluded_projects: userBidProjectIds.length > 0 ? userBidProjectIds : undefined,
+          // NOTE: Removed excluded_projects to avoid 414 URL too long error
+          // Will filter out already-bid projects after getting results
           
           // Budget filters
           min_avg_price: Math.max(user.lower_bid_range || 10, minimumBudgetFix || 0),
@@ -4647,16 +4697,29 @@ async function processAutoBids() {
 
         // Process response data
         const responseData = response.data;
-        const projects = responseData.result.projects;
+        const allProjects = responseData.result.projects;
 
-        console.log("📋 Found", projects.length, "projects");
+        console.log("📋 Found", allProjects.length, "total projects from search");
+
+        // ===== FILTER OUT ALREADY-BID PROJECTS =====
+        const userBidProjectIdsSet = new Set(userBidProjectIds.map(id => parseInt(id)));
+        const projects = allProjects.filter(project => {
+          const projectId = parseInt(project.id);
+          const isAlreadyBid = userBidProjectIdsSet.has(projectId);
+          if (isAlreadyBid) {
+            console.log(`🚫 Filtering out project ${projectId} - already bid`);
+          }
+          return !isAlreadyBid;
+        });
+
+        console.log(`✅ After filtering: ${projects.length} new projects (excluded ${allProjects.length - projects.length} already-bid)`);
 
         if (projects.length === 0) {
-          console.log("No projects found for user skills");
+          console.log("No new projects found after filtering already-bid projects");
           continue;
         }
 
-        // Extract user details for project owners
+        // Extract user details for project owners (using filtered projects)
         const ownerIds = projects.map((project) => project.owner_id);
 
         const projectsDetails = await Promise.all(
@@ -4693,8 +4756,8 @@ async function processAutoBids() {
           })
         );
 
-        // Process projects with owner details
-        const projects2 = responseData.result.projects.map((project, index) => ({
+        // Process projects with owner details (using filtered projects)
+        const projects2 = projects.map((project, index) => ({
           projectid: project.id,
           type: project.type,
           description: project.description,
@@ -5050,17 +5113,12 @@ Best regards`;
                 console.log("⚠️ User has already bid on this project. Skipping...");
                 
                 // Track this project to avoid future attempts
-                if (!user.bidProjectIds) {
-                  user.bidProjectIds = [];
-                }
-                if (!user.bidProjectIds.includes(project.projectid.toString())) {
-                  user.bidProjectIds.push(project.projectid.toString());
-                  await Users.updateOne(
-                    { _id: user._id },
-                    { $set: { bidProjectIds: user.bidProjectIds } }
-                  );
-                  console.log("✅ Project added to bid tracking list");
-                }
+                console.log(`🔗 Adding project ${project.projectid} to bid tracking list`);
+                await Users.updateOne(
+                  { _id: user._id },
+                  { $addToSet: { bidProjectIds: project.projectid.toString() } }
+                );
+                console.log("✅ Project added to bid tracking list");
                 continue;
               }
               
