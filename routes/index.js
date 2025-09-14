@@ -5053,20 +5053,26 @@ Best regards`;
               const userLowerRange = parseInt(user.lower_bid_range) || 250;
               const userHigherRange = parseInt(user.higher_bid_range) || 750;
               
-              // Convert fixed budget ranges to reasonable hourly rates (assuming 40-80 hours of work)
-              const estimatedMinHourly = Math.max(userMinHourly, Math.round(userLowerRange / 80));
-              const estimatedMaxHourly = Math.round(userHigherRange / 40);
+              // Convert fixed budget ranges to reasonable hourly rates (assuming 30-50 hours of work)
+              const estimatedMinHourly = Math.max(userMinHourly, Math.round(userLowerRange / 50), 15); // Minimum $15/hr
+              const estimatedMaxHourly = Math.max(Math.round(userHigherRange / 30), 25); // Minimum $25/hr
               
               // Calculate average of estimated hourly range
               const averageHourly = Math.round((estimatedMinHourly + estimatedMaxHourly) / 2);
               
-              // Add some variation (±20%) for hourly rates
-              const variation = averageHourly * 0.2; // 20% variation
-              const randomVariation = (Math.random() - 0.5) * 2 * variation; // Random ±20%
+              // Add some variation (±15%) for hourly rates
+              const variation = averageHourly * 0.15; // 15% variation
+              const randomVariation = (Math.random() - 0.5) * 2 * variation; // Random ±15%
               bidAmount = Math.round(averageHourly + randomVariation);
               
-              // Ensure bid stays within reasonable range
-              bidAmount = Math.max(estimatedMinHourly, Math.min(estimatedMaxHourly, bidAmount));
+              // Ensure bid stays within reasonable range and meets minimums
+              bidAmount = Math.max(15, estimatedMinHourly, Math.min(estimatedMaxHourly, bidAmount));
+              
+              // Final safety check - ensure we meet Freelancer's typical minimums
+              if (bidAmount < 15) {
+                bidAmount = 15;
+                console.log("⚠️ Adjusted hourly rate to meet $15/hr minimum");
+              }
               
               console.log(`💰 Using calculated hourly range: $${estimatedMinHourly}-$${estimatedMaxHourly}/hr, bidding: $${bidAmount}/hr`);
             }
@@ -5137,6 +5143,15 @@ Best regards`;
               description: templateContent,
               milestone_percentage: 100
             };
+
+            // Final validation - ensure bid meets Freelancer's minimum requirements
+            if (bidAmount < 25) {
+              console.log(`⚠️ Bid amount $${bidAmount} is below Freelancer's $25 minimum. Adjusting to $25.`);
+              bidData.amount = 25;
+              bidAmount = 25;
+            }
+
+            console.log(`💸 Final bid amount: $${bidAmount}`);
 
             // Submit bid
             const bidResponse = await axios.post(
