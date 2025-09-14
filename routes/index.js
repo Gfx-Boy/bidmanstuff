@@ -4958,32 +4958,54 @@ Best regards`;
 
           try {
 
-            // Calculate bid amount using average bid price
+            // Calculate bid amount using user's budget range
             let bidAmount;
+            
             if (project.type === "FIXED") {
-              // Use average bid price if available, otherwise use minimum budget
-              if (project.bidAverage && project.bidAverage > 0) {
-                bidAmount = Math.round(project.bidAverage);
-                console.log(`💰 Using average bid price: ${bidAmount}`);
-              } else {
-                bidAmount = Math.max(
-                  project.minimumBudget,
-                  user.minimum_budget_fixed || project.minimumBudget
-                );
-                console.log(`💰 Using minimum budget (no average available): ${bidAmount}`);
-              }
+              // For fixed projects, use user's fixed budget range
+              const userMinBudget = parseInt(user.lower_bid_range) || 250;
+              const userMaxBudget = parseInt(user.higher_bid_range) || 750;
+              
+              // Calculate average of user's budget range
+              const averageBudget = Math.round((userMinBudget + userMaxBudget) / 2);
+              
+              // Add some variation (±10%) to make bids look more natural
+              const variation = averageBudget * 0.1; // 10% variation
+              const randomVariation = (Math.random() - 0.5) * 2 * variation; // Random ±10%
+              let rawBidAmount = averageBudget + randomVariation;
+              
+              // Round to nice professional values (nearest $25)
+              bidAmount = Math.round(rawBidAmount / 25) * 25;
+              
+              // Ensure bid stays within user's range
+              bidAmount = Math.max(userMinBudget, Math.min(userMaxBudget, bidAmount));
+              
+              console.log(`💰 Using user's budget range: $${userMinBudget}-$${userMaxBudget}, bidding: $${bidAmount}`);
+              
             } else {
-              // For hourly projects, use average bid or minimum
-              if (project.bidAverage && project.bidAverage > 0) {
-                bidAmount = Math.round(project.bidAverage);
-                console.log(`💰 Using average hourly rate: ${bidAmount}`);
-              } else {
-                bidAmount = Math.max(
-                  project.minimumBudget,
-                  user.minimum_budget_hourly || project.minimumBudget
-                );
-                console.log(`💰 Using minimum hourly rate (no average available): ${bidAmount}`);
-              }
+              // For hourly projects, use user's hourly rate with some intelligent calculation
+              const userMinHourly = parseInt(user.minimum_budget_hourly) || 15;
+              
+              // If user has set budget ranges for fixed projects, use those as guidance for hourly rates
+              const userLowerRange = parseInt(user.lower_bid_range) || 250;
+              const userHigherRange = parseInt(user.higher_bid_range) || 750;
+              
+              // Convert fixed budget ranges to reasonable hourly rates (assuming 40-80 hours of work)
+              const estimatedMinHourly = Math.max(userMinHourly, Math.round(userLowerRange / 80));
+              const estimatedMaxHourly = Math.round(userHigherRange / 40);
+              
+              // Calculate average of estimated hourly range
+              const averageHourly = Math.round((estimatedMinHourly + estimatedMaxHourly) / 2);
+              
+              // Add some variation (±20%) for hourly rates
+              const variation = averageHourly * 0.2; // 20% variation
+              const randomVariation = (Math.random() - 0.5) * 2 * variation; // Random ±20%
+              bidAmount = Math.round(averageHourly + randomVariation);
+              
+              // Ensure bid stays within reasonable range
+              bidAmount = Math.max(estimatedMinHourly, Math.min(estimatedMaxHourly, bidAmount));
+              
+              console.log(`💰 Using calculated hourly range: $${estimatedMinHourly}-$${estimatedMaxHourly}/hr, bidding: $${bidAmount}/hr`);
             }
 
             // Get freelancer ID first
